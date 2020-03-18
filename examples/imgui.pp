@@ -465,7 +465,7 @@ var
     end;
   end;
 
-  procedure error_callback(const error: integer; const description: string);
+  procedure error_callback(error: integer; description: string);
   begin
     writeln(stderr, description);
   end;

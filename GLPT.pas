@@ -25,9 +25,28 @@ unit GLPT;
 {$mode objfpc}
 
 {$IFDEF DARWIN}
+  {$define COCOA}
+{$ENDIF}
+
+{$IF defined(CPUARM) or defined(CPUAARCH64)}
+  {$define IPHONE}
+  {$undef COCOA}
+{$ENDIF}
+
+{$IFDEF IPHONESIM}
+  {$define IPHONE}
+  {$undef COCOA}
+{$ENDIF}
+
+{$IFDEF COCOA}
   {$modeswitch advancedrecords}
   {$modeswitch objectivec2}
   {$linkframework CoreVideo}
+{$ENDIF}
+
+{$IFDEF IPHONE}
+  {$modeswitch advancedrecords}
+  {$modeswitch objectivec2}
 {$ENDIF}
 
 interface
@@ -40,9 +59,13 @@ uses
 {$IFDEF LINUX}
   Linux, UnixType, X, Xlib, xutil, GLX;
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   FGL, SysUtils, BaseUnix, Unix, 
   IOKit, MacOSAll, CocoaAll;
+{$ENDIF}
+{$IFDEF IPHONE}
+  SysUtils, BaseUnix, Unix, 
+  MacOSAll, iPhoneAll, CocoaUtils;
 {$ENDIF}
 
 const
@@ -55,6 +78,7 @@ const
   GLPT_MOUSE_BUTTON_LEFT = $00000001;
   GLPT_MOUSE_BUTTON_MIDDLE = $00000002;
   GLPT_MOUSE_BUTTON_RIGHT = $00000003;
+  GLPT_MOUSE_BUTTON_TOUCH = $00000004;
 
   //mouse button state.
   GLPT_RELEASE = $00000000;
@@ -73,17 +97,7 @@ const
   GLPT_MESSAGE_PAINT = 1;
   GLPT_MESSAGE_ACTIVATE = 2;
   GLPT_MESSAGE_DEACTIVATE = 3;
-  GLPT_MESSAGE_KEYPRESS = 4;
-  GLPT_MESSAGE_KEYRELEASE = 5;
-  GLPT_MESSAGE_KEYCHAR = 6;
-  GLPT_MESSAGE_MOUSEDOWN = 7;
-  GLPT_MESSAGE_MOUSEUP = 8;
-  GLPT_MESSAGE_MOUSEMOVE = 9;
-  GLPT_MESSAGE_DOUBLECLICK = 10;
-  GLPT_MESSAGE_MOUSEENTER = 11;
-  GLPT_MESSAGE_MOUSEEXIT = 12;
   GLPT_MESSAGE_CLOSE = 13;
-  GLPT_MESSAGE_SCROLL = 14;
   GLPT_MESSAGE_RESIZE = 15;
   GLPT_MESSAGE_MOVE = 16;
   GLPT_MESSAGE_POPUPCLOSE = 17;
@@ -93,13 +107,42 @@ const
   GLPT_MESSAGE_DROPEXIT = 21;
   GLPT_MESSAGE_HSCROLL = 22;
   GLPT_MESSAGE_ABOUT = 23;
-  GLPT_MESSAGE_CONTROLLER_HAT = 24;
-  GLPT_MESSAGE_CONTROLLER_AXIS = 25;
-  GLPT_MESSAGE_CONTROLLER_BUTTON = 26;
-  GLPT_MESSAGE_CONTROLLER_ADDED = 27;
-  GLPT_MESSAGE_CONTROLLER_REMOVED = 28;
   GLPT_MESSAGE_USER = 50000;
   GLPT_MESSAGE_KILLME = MaxInt;
+
+  // keyboard messages
+  GLPT_MESSAGE_KEYPRESS = 100;
+  GLPT_MESSAGE_KEYRELEASE = 101;
+  GLPT_MESSAGE_KEYCHAR = 102;
+
+  // mouse messages
+  GLPT_MESSAGE_MOUSEDOWN = 200;
+  GLPT_MESSAGE_MOUSEUP = 201;
+  GLPT_MESSAGE_MOUSEMOVE = 202;
+  GLPT_MESSAGE_DOUBLECLICK = 203;
+  GLPT_MESSAGE_MOUSEENTER = 204;
+  GLPT_MESSAGE_MOUSEEXIT = 205;
+  GLPT_MESSAGE_SCROLL = 206;
+
+  // controller messages
+  GLPT_MESSAGE_CONTROLLER_HAT = 300;
+  GLPT_MESSAGE_CONTROLLER_AXIS = 301;
+  GLPT_MESSAGE_CONTROLLER_BUTTON = 302;
+  GLPT_MESSAGE_CONTROLLER_ADDED = 303;
+  GLPT_MESSAGE_CONTROLLER_REMOVED = 304;
+
+  // touch messages
+  GLPT_MESSAGE_TOUCH_DOWN = 400;
+  GLPT_MESSAGE_TOUCH_UP = 401;
+  GLPT_MESSAGE_TOUCH_MOTION = 402;
+
+  // gesture messages
+  GLPT_MESSAGE_GESTURE_TAP = 500;
+  GLPT_MESSAGE_GESTURE_PINCH = 501;
+  GLPT_MESSAGE_GESTURE_SWIPE = 502;
+  GLPT_MESSAGE_GESTURE_PAN = 503;
+  GLPT_MESSAGE_GESTURE_ROTATE = 504;
+  GLPT_MESSAGE_GESTURE_LONG_PRESS = 505;
 
   // scancodes
   GLPT_SCANCODE_UNKNOWN = 0;
@@ -613,6 +656,14 @@ type
     ssMeta, ssSuper, ssHyper, ssAltGr, ssCaps, ssNum,
     ssScroll, ssTriple, ssQuad, ssExtra1, ssExtra2);
 
+type
+  TGestureStateEnum = (gsBegan,
+                       gsChanged,
+                       gsEnded,
+                       gsCancelled,
+                       gsFailed,
+                       gsUnknown);
+
 {$packset 1}
   TShiftState = set of TShiftStateEnum;
 {$packset default}
@@ -638,6 +689,7 @@ type
     doubleBuffer: boolean;
     majorVersion: byte;
     minorVersion: byte;
+    glesVersion: byte;
     profile: byte;
     stencilSize: byte;
     multiSamples: byte;
@@ -673,20 +725,63 @@ type
     ctx: GLXContext;          //< X11 GLX context
     wmDeleteMessage: TAtom;   //< X11 delete mesage callback
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
     ref: NSWindow;
     GLcontext: NSOpenGLContext;
+{$ENDIF}
+{$IFDEF IPHONE}
+    ref: UIWindow;
+    GLcontext: EAGLContext;
 {$ENDIF}
   end;
 
   GLPT_MsgParmMouse = record
     x: integer;                //< X position of the mouse
-    y: integer;                //< Y position of the mouder
+    y: integer;                //< Y position of the mouse
+    deltaX: single;            //< scroll wheel delta X
     deltaY: single;            //< scroll wheel delta Y
     buttons: word;             //< button state of the mouse
     shiftstate: TShiftState;   //< shift state of the keyboard
     delta: integer;            //< drag distance of mouse
     timestamp: TDateTime;      //< timestamp when event was generated
+    clicks: byte;              //< number of mouse clicks associated with event
+  end;
+
+  GLPT_MsgParmFinger = record
+    x: integer;                //< X position of the touch
+    y: integer;                //< Y position of the touch
+    pressure: single;          //< pressure of the touch, or 1 if not available
+    radius: single;
+  end;
+  
+  GLPT_MsgParmTouch = record
+    x: integer;                //< X position of the touch
+    y: integer;                //< Y position of the touch
+    pressure: single;          //< pressure of the touch, or 1 if not available
+    radius: single;
+    timestamp: TDateTime;      //< timestamp when event was generated
+    tapCount: integer;
+    fingers: array[0..4] of GLPT_MsgParmFinger;
+  end;
+
+  GLPT_MsgParmGesture = record
+    x: integer;                //< X position of the gesture
+    y: integer;                //< Y position of the gesture
+    timestamp: TDateTime;      //< timestamp when event was generated
+    state: TGestureStateEnum;  //< current state of the gesture
+    // pinch
+    scale: single;             //< The scale factor relative to the points of the two touches in screen coordinates.
+                               //  0-1 is shrinking, 1-x is expanding
+    velocity: single;          //< The velocity of the pinch in scale factor per second.
+    // swipe
+    direction: byte;           //< direction of the swipe (up = 0, down = 1, left = 2, right = 3)
+    // pan
+    translationX: integer;     //< X
+    translationY: integer;     //< Y
+    velocityX: single;         //< X
+    velocityY: single;         //< Y
+    // rotate
+    rotation: single;          //< 
   end;
 
   GLPT_MsgParmKeyboard = record
@@ -736,6 +831,8 @@ type
       4: (axis: GLPT_MsgParmControllerAxis);     //< controller (axis)
       5: (hat: GLPT_MsgParmControllerHat);       //< controller (hat/joystick)
       6: (button: GLPT_MsgParmControllerButton); //< controller (button)
+      7: (touch: GLPT_MsgParmTouch);             //< touch
+      8: (gesture: GLPT_MsgParmGesture);         //< gesture (ios)
   end;
 
   GLPT_MessageRec = record
@@ -755,11 +852,15 @@ type
   end;
 
   { Flags which are passed to GLPT_Init to request specific features  }
-  GLPT_InitFlagsEnum = (GLPT_FlagGamepad);
+  GLPT_InitFlagsEnum = (GLPT_FlagGamepad,
+                        GLPT_Gestures
+                        );
   GLPT_InitFlags = set of GLPT_InitFlagsEnum;
 
 const
-  GLPT_InitFlagsAll = [GLPT_FlagGamepad];
+  GLPT_InitFlagsAll = [GLPT_FlagGamepad,
+                       GLPT_Gestures
+                       ];
 
 {
    This function returns the GLPT version as string.
@@ -876,6 +977,14 @@ procedure GLPT_SetErrorCallback(errorCallback: GLPT_ErrorCallback);
 procedure GLPT_PollEvents;
 
 {
+   Similar to GLPT_PollEvents except the event is returned directly
+   and the event callback function is not called.
+   @param event: the last event processed
+   @return True if event is available.
+}
+function GLPT_PollEvents(out event: pGLPT_MessageRec): boolean;
+
+{
    Set the cursor to a predefined one
    @param cursor: the index of the cursor
 }
@@ -925,12 +1034,23 @@ procedure GLPT_SetVSync(sync: boolean);
 
 {$INCLUDE include/GLPT_Threads.inc}
 
+function GLPT_Main(argc: cint; argv: pchar): cint; cdecl; external;
+
 implementation
 uses
-  GL, GLext;
+  {$IFDEF COCOA}
+  GL, GLext
+  {$ENDIF}
+  {$IFDEF IPHONE}
+  GLES11
+  {$ENDIF}
+  ;
 
 {$INCLUDE include/GLPT_Keyboard.inc}
 {$INCLUDE include/GLPT_Controller.inc}
+
+const
+  GLPT_ERROR_FATAL = true;
 
 type
   pLink = ^Link;
@@ -952,6 +1072,7 @@ type
 
 var
   msglist: ListBase;
+  lastPolledEvent: pGLPT_MessageRec = nil;
 
   errfunc: GLPT_ErrorCallback = nil;
   windowlist: ListBase;
@@ -963,7 +1084,7 @@ var
 
 //***  Error handling  *************************************************************************************************
 
-function glptError(const error: integer; const msg: string): integer;
+function glptError(const error: integer; const msg: string; fatal: boolean = false): integer;
 var
   errmsg: string;
 begin
@@ -982,6 +1103,9 @@ begin
 
   if assigned(errfunc) then
     errfunc(error, errmsg);
+
+  if fatal then
+    halt(-1);
 
   result := error;
 end;
@@ -1066,8 +1190,13 @@ end;
 {$IFDEF LINUX}
   {$INCLUDE include/GLPT_X11.inc}
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
+  {$INCLUDE include/GLPT_Darwin.inc}
   {$INCLUDE include/GLPT_Cocoa.inc}
+{$ENDIF}
+{$IFDEF IPHONE}
+  {$INCLUDE include/GLPT_Darwin.inc}
+  {$INCLUDE include/GLPT_IPhone.inc}
 {$ENDIF}
 
 //***  Thread functions  **************************************************************************************************
@@ -1533,8 +1662,11 @@ begin
 {$IFDEF LINUX}
   exit(X11_GetTime - inittime);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   exit(Cocoa_GetTime - inittime);
+{$ENDIF}
+{$IFDEF IPHONE}
+  exit(IPhone_GetTime - inittime);
 {$ENDIF}
 end;
 
@@ -1551,8 +1683,11 @@ begin
 {$IFDEF LINUX}
   X11_Delay(ms);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_Delay(ms);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_Delay(ms);
 {$ENDIF}
 end;
 
@@ -1571,8 +1706,11 @@ begin
 {$IFDEF LINUX}
   exit(X11_Init(flags));
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   exit(Cocoa_Init(flags));
+{$ENDIF}
+{$IFDEF IPHONE}
+  exit(IPhone_Init(flags));
 {$ENDIF}
 end;
 
@@ -1594,7 +1732,7 @@ begin
 {$IFDEF LINUX}
   exit(X11_Terminate);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   exit(Cocoa_Terminate);
 {$ENDIF}
 end;
@@ -1616,6 +1754,7 @@ begin
   result.doubleBuffer := true;
   result.majorVersion := 2;
   result.minorVersion := 1;
+  result.glesVersion := 1;
   result.profile := GLPT_CONTEXT_PROFILE_LEGACY;
   result.stencilSize := 8;
   result.multiSamples := 0;
@@ -1649,8 +1788,11 @@ begin
 {$IFDEF LINUX}
   res := X11_CreateWindow(win, posx, posy, sizex, sizey, title);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   res := Cocoa_CreateWindow(win, posx, posy, sizex, sizey, title);
+{$ENDIF}
+{$IFDEF IPhone}
+  res := IPhone_CreateWindow(win, posx, posy, sizex, sizey, title);
 {$ENDIF}
 
   if res then
@@ -1673,8 +1815,11 @@ begin
 {$IFDEF LINUX}
   X11_DestroyWindow(win);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_DestroyWindow(win);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_DestroyWindow(win);
 {$ENDIF}
 
   //remove and free window object
@@ -1692,8 +1837,11 @@ begin
 {$IFDEF LINUX}
   exit(X11_MakeCurrent(win));
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   exit(Cocoa_MakeCurrent(win));
+{$ENDIF}
+{$IFDEF IPHONE}
+  exit(IPhone_MakeCurrent(win));
 {$ENDIF}
 end;
 
@@ -1705,8 +1853,11 @@ begin
 {$IFDEF LINUX}
   X11_SwapBuffers(win);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_SwapBuffers(win);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_SwapBuffers(win);
 {$ENDIF}
 end;
 
@@ -1718,8 +1869,11 @@ begin
 {$IFDEF LINUX}
   X11_GetFrameBufferSize(win, width, height);
 {$ENDIF}
-{$IFDEF Darwin}
+{$IFDEF COCOA}
   Cocoa_GetFrameBufferSize(win, width, height);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_GetFrameBufferSize(win, width, height);
 {$ENDIF}
 end;
 
@@ -1728,10 +1882,7 @@ begin
   errfunc := errorCallback;
 end;
 
-procedure GLPT_PollEvents;
-var
-  event: pGLPT_MessageRec;
-  win: pGLPTwindow;
+function GLPT_PollEvents(out event: pGLPT_MessageRec): boolean;
 begin
 {$IFDEF MSWINDOWS}
   gdi_PollEvents;
@@ -1739,11 +1890,28 @@ begin
 {$IFDEF LINUX}
   X11_PollEvents;
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_PollEvents;
 {$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_PollEvents;
+{$ENDIF}
+
+  if lastPolledEvent <> nil then
+    glptDeleteMessage(lastPolledEvent);
 
   event := glptReadFirstMessage;
+
+  lastPolledEvent := event;
+  result := assigned(event);
+end;
+
+procedure GLPT_PollEvents;
+var
+  event: pGLPT_MessageRec;
+  win: pGLPTWindow;
+begin
+  GLPT_PollEvents(event);
 
   if event <> nil then
   begin
@@ -1753,6 +1921,7 @@ begin
         win^.event_callback(event);
 
     glptDeleteMessage(event);
+    lastPolledEvent := nil;
   end;
 end;
 
@@ -1764,8 +1933,11 @@ begin
 {$IFDEF LINUX}
   X11_SetCursor(cursor);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_SetCursor(cursor);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_SetCursor(cursor);
 {$ENDIF}
 end;
 
@@ -1777,8 +1949,11 @@ begin
 {$IFDEF LINUX}
   X11_GetDisplayCoords(dr);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   Cocoa_GetDisplayCoords(dr);
+{$ENDIF}
+{$IFDEF IPHONE}
+  IPhone_GetDisplayCoords(dr);
 {$ENDIF}
 end;
 
@@ -1790,8 +1965,11 @@ begin
 {$IFDEF LINUX}
   result := ExtractFilePath(ParamStr(0));
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   result := Cocoa_GetBasePath;
+{$ENDIF}
+{$IFDEF IPHONE}
+  result := IPhone_GetBasePath;
 {$ENDIF}
 end;
 
@@ -1803,8 +1981,11 @@ begin
 {$IFDEF LINUX}
   result := GetAppConfigDir(False);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   result := Cocoa_GetPrefPath(org, app);
+{$ENDIF}
+{$IFDEF IPHONE}
+  result := IPhone_GetPrefPath(org, app);
 {$ENDIF}
 end;
 
@@ -1821,9 +2002,16 @@ begin
 {$IFDEF LINUX}
   //X11_SetVSync(sync);
 {$ENDIF}
-{$IFDEF DARWIN}
+{$IFDEF COCOA}
   //Cocoa_SetVSync(sync);
 {$ENDIF}
 end;
+
+{$ifdef IPHONE}
+function main(argc: cint; argv: pchar): cint; cdecl; public;
+begin
+  result := IPhone_Main;
+end;
+{$endif}
 
 end.

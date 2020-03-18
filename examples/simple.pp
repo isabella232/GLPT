@@ -12,7 +12,7 @@ var
   width: integer = 640;
   height: integer = 480;
   nbFrames: longint = 0;
-  lastTime: double;
+  lastTime: double = 0;
   rotate: double;
 
   procedure write_FPS;
