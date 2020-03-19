@@ -85,6 +85,33 @@ begin
   params.touch.radius := touch.majorRadius;
   result := params;
 end;
+function MessageParamsForTouches(view: UIView; touches: NSSet): GLPT_MessageParams;
+var
+  touch: UITouch;
+  params: GLPT_MessageParams;
+  fingerID: integer = 0;
+begin
+  params := Default(GLPT_MessageParams);
+  for touch in touches do
+    begin
+      if fingerID = 0 then
+        begin
+          params.touch.x := Trunc(touch.locationInView(view).x);
+          params.touch.y := Trunc(touch.locationInView(view).y);
+          params.touch.pressure := PressureForTouch(touch);
+          params.touch.timestamp := IPhone_GetTime;
+          params.touch.tapCount := touch.tapCount;
+          params.touch.radius := touch.majorRadius;
+          params.touch.fingerCount := touches.count;
+        end;
+      params.touch.fingers[fingerID].x := Trunc(touch.locationInView(view).x);
+      params.touch.fingers[fingerID].y := Trunc(touch.locationInView(view).y);
+      params.touch.fingers[fingerID].pressure := PressureForTouch(touch);
+      params.touch.fingers[fingerID].radius := touch.majorRadius;
+      inc(fingerID);
+    end;
+  result := params;
+end;
 
 function MessageParamsForGesture(view: UIView; gesture: UIGestureRecognizer): GLPT_MessageParams;
 var
@@ -187,29 +214,25 @@ var
   params: GLPT_MessageParams;
   touch: UITouch;
 begin
-  writeln('touches began ', touches.count);
   firstFingerDown := nil;
 
   for touch in touches do
     begin
-      if firstFingerDown = nil then
-        begin
-          // simulate mouse moved
-          params := SimulatedMouseMessageParamsForTouch(self, touch);
-          glptPostMessage(owner, GLPT_MESSAGE_MOUSEMOVE, params);
+      // simulate mouse moved
+      params := SimulatedMouseMessageParamsForTouch(self, touch);
+      glptPostMessage(owner, GLPT_MESSAGE_MOUSEMOVE, params);
 
-          // simulate mouse down
-          params := SimulatedMouseMessageParamsForTouch(self, touch);
-          params.mouse.buttons := GLPT_MOUSE_BUTTON_LEFT;
-          glptPostMessage(owner, GLPT_MESSAGE_MOUSEDOWN, params);
+      // simulate mouse down
+      params := SimulatedMouseMessageParamsForTouch(self, touch);
+      params.mouse.buttons := GLPT_MOUSE_BUTTON_LEFT;
+      glptPostMessage(owner, GLPT_MESSAGE_MOUSEDOWN, params);
 
-          firstFingerDown := touch;
-        end;
-
-      // https://wiki.libsdl.org/SDL_TouchFingerEvent
-      params := MessageParamsForTouch(self, touch);
-      glptPostMessage(owner, GLPT_MESSAGE_TOUCH_DOWN, params);
+      firstFingerDown := touch;
+      break;
     end;
+
+  params := MessageParamsForTouches(self, touches);
+  glptPostMessage(owner, GLPT_MESSAGE_TOUCH_DOWN, params);
 end;
 
 procedure TGLPT_UIView.touchesMoved_withEvent (touches: NSSet; event: UIEvent);
@@ -224,12 +247,11 @@ begin
           params := SimulatedMouseMessageParamsForTouch(self, touch);
           glptPostMessage(owner, GLPT_MESSAGE_MOUSEMOVE, params);
         end;
-
-      params := MessageParamsForTouch(self, touch);
-      glptPostMessage(owner, GLPT_MESSAGE_TOUCH_MOTION, params);
-
-      waitForMainLoop;
     end;
+
+  params := MessageParamsForTouches(self, touches);
+  glptPostMessage(owner, GLPT_MESSAGE_TOUCH_MOTION, params);
+  waitForMainLoop;
 end;
 
 procedure TGLPT_UIView.touchesEnded_withEvent (touches: NSSet; event: UIEvent);
@@ -237,21 +259,17 @@ var
   params: GLPT_MessageParams;
   touch: UITouch;
 begin
-  writeln('touches ended ', touches.count);
-
   for touch in touches do
-    begin
-      if touch = firstFingerDown then
-        begin
-          params := SimulatedMouseMessageParamsForTouch(self, touch);
-          params.mouse.buttons := GLPT_MOUSE_BUTTON_LEFT;
-          glptPostMessage(owner, GLPT_MESSAGE_MOUSEUP, params);
-          firstFingerDown := nil;
-        end;
+    if touch = firstFingerDown then
+      begin
+        params := SimulatedMouseMessageParamsForTouch(self, touch);
+        params.mouse.buttons := GLPT_MOUSE_BUTTON_LEFT;
+        glptPostMessage(owner, GLPT_MESSAGE_MOUSEUP, params);
+        firstFingerDown := nil;
+      end;
 
-      params := MessageParamsForTouch(self, touch);
-      glptPostMessage(owner, GLPT_MESSAGE_TOUCH_UP, params);
-    end;
+  params := MessageParamsForTouches(self, touches);
+  glptPostMessage(owner, GLPT_MESSAGE_TOUCH_UP, params);
 end;
 
 procedure TGLPT_UIView.touchesCancelled_withEvent (touches: NSSet; event: UIEvent);
@@ -586,6 +604,11 @@ begin
   result := true;
 end;
 
+function GetRootView(win: pGLPTwindow): TOpenGLESView;
+begin
+  result := TOpenGLESView(win^.ref.rootViewController.view.subviews.objectAtIndex(0));
+end;
+
 function IPhone_MakeCurrent(win: pGLPTwindow): boolean;
 begin
   EAGLContext.setCurrentContext(win^.glcontext);
@@ -597,10 +620,7 @@ procedure IPhone_SwapBuffers(win: pGLPTwindow);
 var
   view: TOpenGLESView;
 begin
-  view := TOpenGLESView(win^.ref.rootViewController.view.subviews.objectAtIndex(0));
-
-  // TODO: this needs to be in poll events but we don't have a window reference! 
-  GLPT_SemaphorePost(view.mainLoopSemaphore);
+  view := GetRootView(win);
 
   // once the display link has been setup we can block waiting for it to fire
   if view.displayLinkSetup then
@@ -617,7 +637,12 @@ end;
 procedure IPhone_PollEvents;
 const
   kSeconds = 0.000002;
+var
+  view: TOpenGLESView;
 begin
+  view := GetRootView(GlobalWindow);
+  GLPT_SemaphorePost(view.mainLoopSemaphore);
+
   { Let the run loop run for a short amount of time: long enough for
     touch events to get processed (which is important to get certain
     elements of Game Center's GKLeaderboardViewController to respond
@@ -629,6 +654,7 @@ begin
   { Make sure UIScrollView objects scroll properly. }
   while CFRunLoopRunInMode(CFStringRef(UITrackingRunLoopMode), kSeconds, true) = kCFRunLoopRunHandledSource do 
     ;
+
 end;
 
 procedure IPhone_GetDisplayCoords(var dr: GLPTRect);

@@ -45,8 +45,8 @@ end;
 
 function TCocoaObject.initWithCoder(aDecoder: NSCoder): id;
 begin
-  {$if defined(cpux86_64)}
-  result := initWithObject(TObject(aDecoder.decodeInt64ForKey(NSSTR('m_obj'))));
+  {$if defined(cpux86_64) or defined(cpuaarch64)}
+  result := initWithObject(TObject(aDecoder.decodeInt64ForKey(NSSTR('m_obj'))))
   {$else}
   result := initWithObject(TObject(aDecoder.decodeInt32ForKey(NSSTR('m_obj'))));
   {$endif}
@@ -54,7 +54,7 @@ end;
 
 procedure TCocoaObject.encodeWithCoder(aCoder: NSCoder);
 begin
-  {$if defined(cpux86_64)}
+  {$if defined(cpux86_64) or defined(cpuaarch64)}
   aCoder.encodeInt64_forKey(cint64(m_obj), NSSTR('m_obj'));
   {$else}
   aCoder.encodeInt32_forKey(cint32(m_obj), NSSTR('m_obj'));

@@ -761,7 +761,8 @@ type
     radius: single;
     timestamp: TDateTime;      //< timestamp when event was generated
     tapCount: integer;
-    fingers: array[0..4] of GLPT_MsgParmFinger;
+    fingerCount: byte;         //< the number of fingers in the touch
+    fingers: array[0..7] of GLPT_MsgParmFinger;
   end;
 
   GLPT_MsgParmGesture = record
