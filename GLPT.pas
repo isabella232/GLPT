@@ -61,11 +61,14 @@ uses
 {$ENDIF}
 {$IFDEF COCOA}
   FGL, SysUtils, BaseUnix, Unix, 
-  IOKit, MacOSAll, CocoaAll;
+  {$IFDEF GLPT_GAMEPAD}
+  IOKit,
+  {$ENDIF}
+  MacOSAll, CocoaAll;
 {$ENDIF}
 {$IFDEF IPHONE}
   SysUtils, BaseUnix, Unix, 
-  MacOSAll, iPhoneAll, CocoaUtils;
+  MacOSAll, iPhoneAll;
 {$ENDIF}
 
 const
@@ -853,13 +856,13 @@ type
   end;
 
   { Flags which are passed to GLPT_Init to request specific features  }
-  GLPT_InitFlagsEnum = (GLPT_FlagGamepad,
+  GLPT_InitFlagsEnum = ({$ifdef GLPT_GAMEPAD}GLPT_FlagGamepad,{$endif}
                         GLPT_Gestures
                         );
   GLPT_InitFlags = set of GLPT_InitFlagsEnum;
 
 const
-  GLPT_InitFlagsAll = [GLPT_FlagGamepad,
+  GLPT_InitFlagsAll = [{$ifdef GLPT_GAMEPAD}GLPT_FlagGamepad,{$endif}
                        GLPT_Gestures
                        ];
 

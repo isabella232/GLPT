@@ -349,7 +349,10 @@ type
 
 function Cocoa_GetKeyboardShiftState: TShiftState; forward;
 function Cocoa_GetTime: double; forward;
+
+{$ifdef GLPT_GAMEPAD}
 procedure Cocoa_PollDevices; forward;
+{$endif}
 
 procedure TCocoaApp.poll;
 var
@@ -359,8 +362,10 @@ var
   pool: NSAutoreleasePool;
   keymap: GLPTKeymapArrayPtr;
 begin
+  {$ifdef GLPT_GAMEPAD}
   Cocoa_PollDevices;
-
+  {$endif}
+  
   pool := NSAutoreleasePool.alloc.init;
   event := nextEventMatchingMask_untilDate_inMode_dequeue(NSAnyEventMask, nil, NSDefaultRunLoopMode, true);
   if event <> nil then
@@ -484,6 +489,7 @@ type
       trackingArea: NSTrackingArea;
       displayLink: CVDisplayLinkRef;
       displayLinkSemaphore: pGLPT_Semaphore;
+      isLiveResizing: boolean;
 
       function defaultPixelFormat: NSOpenGLPixelFormat; message 'defaultPixelFormat';
       function windowRef: pGLPTwindow; message 'windowRef';
@@ -492,6 +498,8 @@ type
       procedure setupContext; message 'setupContext';
 
       procedure frameChanged (sender: NSNotification); message 'frameChanged:';
+      procedure windowWillStartLiveResize (sender: NSNotification); message 'windowWillStartLiveResize:';
+      procedure windowDidEndLiveResize (sender: NSNotification); message 'windowDidEndLiveResize:';
       procedure reshape; message 'reshape';
   end;
 
@@ -592,8 +600,19 @@ end;
 
 procedure TOpenGLView.frameChanged (sender: NSNotification);
 begin
-  if openGLContext <> nil then
+  if not isLiveResizing and assigned(openGLContext) then
     reshape;
+end;
+
+procedure TOpenGLView.windowWillStartLiveResize (sender: NSNotification);
+begin
+  isLiveResizing := true;
+end;
+
+procedure TOpenGLView.windowDidEndLiveResize (sender: NSNotification);
+begin
+  isLiveResizing := false;
+  reshape;
 end;
 
 procedure TOpenGLView.drawRect(dirtyRect: NSRect);
@@ -624,56 +643,61 @@ begin
 end;
 
 function TOpenGLView.defaultPixelFormat: NSOpenGLPixelFormat;
+
   function Inc (var i: integer): integer;
   begin
     i += 1;
     result := i;
   end;
+
+var
+  attributes: array[0..32] of NSOpenGLPixelFormatAttribute;
+  i: integer = -1;
+
+  procedure Add(name: NSOpenGLPixelFormatAttribute; value: integer = -1);
+  begin
+    attributes[Inc(i)] := name;
+    if value <> -1 then
+      attributes[Inc(i)] := value;
+  end;
+
 const
   NSOpenGLPFAOpenGLProfile = 99 { available in 10_7 };
 const
   NSOpenGLProfileVersionLegacy = $1000 { available in 10_7 };
   NSOpenGLProfileVersion3_2Core = $3200 { available in 10_7 };
   NSOpenGLProfileVersion4_1Core = $4100 { available in 10_10 };
+
 var
-  attributes: array[0..32] of NSOpenGLPixelFormatAttribute;
-  i: integer = -1;
   context: GLPT_Context;
 begin
   context := glptContext;
 
   if context.doubleBuffer then
-    attributes[Inc(i)] := NSOpenGLPFADoubleBuffer;
+    Add(NSOpenGLPFADoubleBuffer);
 
-  attributes[Inc(i)] := NSOpenGLPFAColorSize;
-  attributes[Inc(i)] := context.colorSize;
-
-  attributes[Inc(i)] := NSOpenGLPFADepthSize;
-  attributes[Inc(i)] := context.depthSize;
-
-  attributes[Inc(i)] := NSOpenGLPFAStencilSize;
-  attributes[Inc(i)] := context.stencilSize;
+  Add(NSOpenGLPFAColorSize, context.colorSize);
+  Add(NSOpenGLPFADepthSize, context.depthSize);
+  Add(NSOpenGLPFAStencilSize, context.stencilSize);
+  //Add(NSOpenGLPFAOffScreen, 1);
 
   if context.multiSamples > 0 then
     begin
-      attributes[Inc(i)] := NSOpenGLPFAMultisample;
-      attributes[Inc(i)] := 1;
-      attributes[Inc(i)] := NSOpenGLPFASampleBuffers;
-      attributes[Inc(i)] := 1;
-      attributes[Inc(i)] := NSOpenGLPFASamples;
-      attributes[Inc(i)] := context.multiSamples;
+      Add(NSOpenGLPFAMultisample, 1);
+      Add(NSOpenGLPFASampleBuffers, 1);
+      Add(NSOpenGLPFASamples, context.multiSamples);
     end;
 
   // we can only specify "legacy" or "core" on mac and the system will decide what version we actually get
-  attributes[Inc(i)] := NSOpenGLPFAOpenGLProfile;
+  Add(NSOpenGLPFAOpenGLProfile);
   if context.profile = GLPT_CONTEXT_PROFILE_LEGACY then
-    attributes[Inc(i)] := NSOpenGLProfileVersionLegacy
+    Add(NSOpenGLProfileVersionLegacy)
   else if context.profile = GLPT_CONTEXT_PROFILE_CORE then
     begin
       if context.majorVersion = 3 then
-        attributes[Inc(i)] := NSOpenGLProfileVersion3_2Core
+        Add(NSOpenGLProfileVersion3_2Core)
       else if context.majorVersion = 4 then
-        attributes[Inc(i)] := NSOpenGLProfileVersion4_1Core
+        Add(NSOpenGLProfileVersion4_1Core)
       else
         glptError(GLPT_ERROR_PLATFORM, 'invalid core profile major version');
     end
@@ -681,7 +705,7 @@ begin
     glptError(GLPT_ERROR_PLATFORM, 'invalid context profile');
 
   // terminate with 0
-  attributes[Inc(i)] := 0;
+  Add(0);
 
   result := NSOpenGLPixelFormat.alloc.initWithAttributes(@attributes).autorelease;
   if result = nil then
@@ -702,7 +726,11 @@ function TOpenGLView.initWithFrame(frameRect: NSRect): id;
 begin
   result := inherited initWithFrame(frameRect);
   if result <> nil then
-    NSNotificationCenter(NSNotificationCenter.defaultCenter).addObserver_selector_name_object(result, objcselector('frameChanged:'), NSViewGlobalFrameDidChangeNotification, nil);
+    begin
+      NSNotificationCenter.defaultCenter.addObserver_selector_name_object(result, objcselector('windowWillStartLiveResize:'), NSWindowWillStartLiveResizeNotification, nil);
+      NSNotificationCenter.defaultCenter.addObserver_selector_name_object(result, objcselector('windowDidEndLiveResize:'), NSWindowDidEndLiveResizeNotification, nil);
+      NSNotificationCenter.defaultCenter.addObserver_selector_name_object(result, objcselector('frameChanged:'), NSViewGlobalFrameDidChangeNotification, nil);
+    end;
 end;
 
 //#########################################################
@@ -786,6 +814,7 @@ begin
   window.ref := win;
 
   openGLView := TOpenGLView.alloc.initWithFrame(window.contentView.bounds);
+  //openGLView.setWantsLayer(true);
   window.setContentView(openGLView);
   openGLView.release;
 
@@ -920,6 +949,7 @@ end;
 // CONTROLLERS
 //#########################################################
 
+{$ifdef GLPT_GAMEPAD}
 // https://stackoverflow.com/questions/2234364/how-to-detect-a-gamepad-button-press-on-osx-10-5-and-higher
 
 var
@@ -1399,6 +1429,7 @@ begin
   //    /* no-op. Callback fires once per existing device. */
   //}
 end;
+{$endif}
 
 function Cocoa_Init(flags: GLPT_InitFlags): boolean;
 var
@@ -1408,8 +1439,10 @@ var
 begin  
 
   // initial gamepad support
+  {$ifdef GLPT_GAMEPAD}
   if (GLPT_FlagGamepad in flags) and not Cocoa_Gamepad_Init then
     exit(false);
+  {$endif}
 
   // init the fpc heap manager
   TThread.Create(false).WaitFor;
